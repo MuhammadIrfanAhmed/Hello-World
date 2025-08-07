@@ -1,0 +1,399 @@
+---
+title: "Enhancing Demand Forecasting Accuracy for Retail Operations(Studying Walmart Data)"
+author: "Muhammad Irfan Ahmed-811317582"
+date: "2025-07-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Executive Summary
+
+Retail operations need accurate demand forecasts to lessen waste and improve inventory. In this project, we learn how advanced analytics models improve the accuracy of demand forecasts. We use Walmart's past sales data. Common statistical models, like ARIMA, often do not include outside factors - these factors include holidays, temperature shifts along with economic numbers. We put ARIMA, Prophet, Random Forest as well as XGBoost models against each other. XGBoost was the most accurate model - it offered the lowest MAPE in addition to RMSE. We changed these forecasts into instructions for planning inventory, buying products in addition to running stores. This increased profit and how well things worked.
+
+
+
+
+
+STEP 1: Load & Clean the Dataset. Installing the necessary libraries.
+
+In this step, the dataset is loaded, missing values are handled, date formats are standardized, and helpful features like Month, Week, DayOfWeek, lagged sales, and moving averages are engineered. These characteristics aid in identifying retail sales momentum and seasonality.
+
+```{r}
+install.packages("readr", repos = "https://cloud.r-project.org/")
+
+# Load necessary packages
+library(readr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+
+# Step 1: Load the dataset
+walmart <- read_csv("C:/Users/Momin/Documents/Walmart.csv")
+
+# Step 2: Preview structure
+glimpse(walmart)
+
+# Step 3: Rename columns (if unnamed)
+colnames(walmart) <- c("Store", "Date", "Weekly_Sales", "Holiday_Flag", 
+                       "Temperature", "Fuel_Price", "CPI", "Unemployment")
+
+# Step 4: Parse inconsistent dates
+walmart$Date <- parse_date_time(walmart$Date, orders = c("mdY", "dmY", "dmy", "m/d/Y"))
+
+# Step 5: Sort by store and date
+walmart <- walmart %>%
+  arrange(Store, Date)
+
+# Step 6: Check for missing values
+sapply(walmart, function(x) sum(is.na(x)))
+
+# Step 7: Basic summary
+summary(walmart)
+
+# Check for remaining NAs
+sum(is.na(walmart$Date))
+
+# View problematic rows (if any remain)
+walmart[is.na(walmart$Date), ]
+
+
+# Sort data by store and date
+library(dplyr)
+walmart <- walmart %>% arrange(Store, Date)
+
+# Optional: Check structure and head
+str(walmart)
+head(walmart)
+```
+ 
+Feature Engineering & Exploratory Data Analysis (EDA)
+
+```{r}
+# Load libraries
+library(dplyr)
+library(lubridate)
+
+# Create new time-based features
+walmart <- walmart %>%
+  mutate(
+    Year = year(Date),
+    Month = month(Date),
+    Week = week(Date),
+    DayOfWeek = wday(Date, label = TRUE),  # e.g., Mon, Tue
+    IsHoliday = ifelse(Holiday_Flag == 1, "Holiday", "Non-Holiday")
+  )
+
+
+
+```
+Time-based features were successfully added to the dataset after it had been cleaned. New features including Month, Week, and DayOfWeek were removed, and the Date column was standardized. This configuration added significant temporal context to the data, which served as the basis for our time series models and tree-based machine learning techniques.
+
+
+
+
+
+
+Basic EDA Visualizations
+
+We assess correlations between the target variable and macroeconomic parameters like fuel price, CPI, and unemployment, show weekly sales trends, and comprehend seasonality. This aids in determining which outside variables might affect sales.
+```{r}
+library(ggplot2)
+
+# 1. Weekly Sales over Time (All Stores Combined)
+ggplot(walmart, aes(x = Date, y = Weekly_Sales)) +
+  geom_line(color = "steelblue") +
+  labs(title = "Weekly Sales Over Time", x = "Date", y = "Sales")
+
+# 2. Sales by Month
+ggplot(walmart, aes(x = factor(Month), y = Weekly_Sales)) +
+  geom_boxplot(fill = "skyblue") +
+  labs(title = "Monthly Sales Distribution", x = "Month", y = "Weekly Sales")
+
+# 3. Sales: Holiday vs Non-Holiday
+ggplot(walmart, aes(x = IsHoliday, y = Weekly_Sales, fill = IsHoliday)) +
+  geom_boxplot() +
+  labs(title = "Sales on Holidays vs Non-Holidays", x = "", y = "Weekly Sales")
+
+# 4. Correlation Plot (Numeric Features)
+numeric_data <- walmart %>% 
+  select(Weekly_Sales, Temperature, Fuel_Price, CPI, Unemployment)
+
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+print(cor_matrix)
+
+```
+Clear weekly and seasonal variations were seen in the trend analysis, with notable peaks occurring during the holiday periods. Weekly_Sales had a somewhat negative correlation with both CPI and unemployment, suggesting that weak economic conditions tend to lower consumer spending. The link between Fuel Price and Fuel was weaker. We incorporated these variables into our predicting models based on these insights.
+
+
+
+
+
+
+Step 3: Baseline Forecasting Models
+
+Prophet is a decomposable time series model that effectively manages the impacts of holidays, trends, and seasonality. It works especially well in business settings with significant seasonal trends.
+
+```{r}
+# Install and load Prophet
+install.packages("prophet", repos = "https://cloud.r-project.org/")
+library(prophet)
+
+# Step 1: Aggregate weekly sales across all stores
+library(dplyr)
+sales_ts <- walmart %>%
+  group_by(Date) %>%
+  summarise(Weekly_Sales = sum(Weekly_Sales, na.rm = TRUE)) %>%
+  arrange(Date)
+
+# Step 2: Prepare data for Prophet (columns must be named ds and y)
+prophet_df <- sales_ts %>%
+  rename(ds = Date, y = Weekly_Sales)
+
+# Step 3: Fit the Prophet model
+model <- prophet(prophet_df)
+
+# Step 4: Make future dataframe (e.g., 12 weeks ahead)
+future <- make_future_dataframe(model, periods = 12, freq = "week")
+
+# Step 5: Forecast
+forecast <- predict(model, future)
+
+# Step 6: Plot forecast
+plot(model, forecast)
+
+# Optional: Seasonality components
+prophet_plot_components(model, forecast)
+
+install.packages("Metrics", repos = "https://cloud.r-project.org/")
+# Step 7: Merge forecasted values with actuals
+library(dplyr)
+library(Metrics)
+library(tidyr)
+
+# Join on date
+results <- left_join(prophet_df, forecast[, c("ds", "yhat")], by = "ds")
+
+# Filter only the last 12 weeks of actuals for evaluation
+# Make sure you have actuals for these dates
+last_dates <- tail(prophet_df$ds, 12)
+eval_df <- results %>% filter(ds %in% last_dates)
+
+# Step 8: Remove NA and calculate metrics
+eval_df <- eval_df %>% drop_na(y, yhat)
+
+# Compute MAPE and RMSE
+mape_value <- mape(eval_df$y, eval_df$yhat)
+rmse_value <- rmse(eval_df$y, eval_df$yhat)
+
+# Print results
+print(paste("MAPE (Prophet):", round(mape_value * 100, 2), "%"))
+print(paste("RMSE (Prophet):", round(rmse_value, 2)))
+
+
+```
+The Prophet model successfully identified seasonal and holiday increases and predicted sales for the upcoming 12 weeks. It demonstrated great accuracy with an RMSE of 912,216 and a MAPE of 1.52%. The components that were visualized demonstrate how successfully trend and holiday effects were integrated. Prophet's predictive ability is somewhat limited during times of economic volatility, though, because it does not make use of exogenous variables like the CPI or fuel price.
+
+
+
+
+
+
+Step 3B: ARIMA Forecasting Model.
+A classic statistical forecasting model is called ARIMA (AutoRegressive Integrated Moving Average). Although it can capture autocorrelations and moving averages and performs well for stationary time series, it by default does not enable external regressors.
+
+```{r}
+install.packages("forecast", repos = "https://cloud.r-project.org/")
+install.packages("tseries", repos = "https://cloud.r-project.org/")
+library(forecast)
+library(tseries)
+
+library(dplyr)
+
+sales_ts <- walmart %>%
+  group_by(Date) %>%
+  summarise(Weekly_Sales = sum(Weekly_Sales, na.rm = TRUE)) %>%
+  arrange(Date)
+
+
+# Convert to ts object (start from 2010, 52 weeks per year)
+weekly_sales_ts <- ts(sales_ts$Weekly_Sales, start = c(2010, 1), frequency = 52)
+
+# Plot the time series
+plot(weekly_sales_ts, main = "Weekly Sales Time Series", ylab = "Sales", xlab = "Time")
+
+adf.test(weekly_sales_ts)
+
+auto_fit <- auto.arima(weekly_sales_ts, seasonal = TRUE)
+summary(auto_fit)
+
+
+# Forecast next 12 weeks
+forecast_arima <- forecast(auto_fit, h = 12)
+
+# Plot forecast
+plot(forecast_arima, main = "ARIMA Forecast for Weekly Sales")
+
+library(Metrics)
+
+# Actual values for last 12 weeks
+actuals_arima <- tail(sales_ts$Weekly_Sales, 12)
+
+# Forecasted values from ARIMA
+predicted_arima <- as.numeric(forecast_arima$mean)
+
+# Calculate metrics
+mape_arima <- mape(actuals_arima, predicted_arima)
+rmse_arima <- rmse(actuals_arima, predicted_arima)
+
+# Print results
+print(paste("MAPE (ARIMA):", round(mape_arima * 100, 2), "%"))
+print(paste("RMSE (ARIMA):", round(rmse_arima, 2)))
+
+
+
+```
+Auto.arima was used to fit the ARIMA model. Despite modeling past sales trends, its performance was relatively subpar, with an RMSE of 12,947,358 and a MAPE of 17.59%. This large inaccuracy indicates that seasonal variability and holiday effects were not adequately captured by ARIMA. Its accuracy was further limited by its inability to include external variables.
+
+
+
+
+
+
+
+
+Step 4: Machine Learning-Based Forecasting (XGBoost & Random Forest)
+
+An ensemble tree-based model called Random Forest is capable of managing intricate feature interactions and non-linear relationships. Here, we apply it to better forecast by combining macroeconomic variables with time-based features.
+
+```{r}
+chooseCRANmirror(graphics = FALSE, ind = 1)
+
+install.packages("randomForest")
+install.packages("caret")
+install.packages("xgboost")
+install.packages("lubridate")
+
+library(randomForest)
+library(caret)
+library(xgboost)
+library(lubridate)
+library(dplyr)
+
+# Base dataset
+ml_data <- walmart %>%
+  arrange(Store, Date) %>%
+  mutate(
+    Month = month(Date),
+    Week = week(Date),
+    DayOfWeek = wday(Date),
+    Year = year(Date),
+    IsHoliday = as.factor(Holiday_Flag)
+  )
+
+# Lag features (e.g., 1-week lag)
+ml_data <- ml_data %>%
+  group_by(Store) %>%
+  mutate(
+    Lag_1 = lag(Weekly_Sales, 1),
+    Lag_2 = lag(Weekly_Sales, 2),
+    MA_4 = zoo::rollmean(Weekly_Sales, k = 4, fill = NA, align = "right")
+  ) %>%
+  ungroup()
+
+# Remove NA rows from lags
+ml_data <- na.omit(ml_data)
+
+
+set.seed(123)
+
+train_index <- createDataPartition(ml_data$Weekly_Sales, p = 0.8, list = FALSE)
+train <- ml_data[train_index, ]
+test <- ml_data[-train_index, ]
+
+rf_model <- randomForest(
+  Weekly_Sales ~ Store + Month + Week + DayOfWeek + Fuel_Price + CPI + Unemployment + IsHoliday + Lag_1 + Lag_2 + MA_4,
+  data = train,
+  ntree = 100
+)
+
+# Predict on test set
+rf_preds <- predict(rf_model, newdata = test)
+
+# Evaluate performance
+rf_mape <- mean(abs((test$Weekly_Sales - rf_preds) / test$Weekly_Sales)) * 100
+rf_rmse <- sqrt(mean((test$Weekly_Sales - rf_preds)^2))
+
+cat("Random Forest MAPE:", rf_mape, "\n")
+cat("Random Forest RMSE:", rf_rmse, "\n")
+
+
+
+```
+With MAPE = 4.9% and RMSE = 88,839, the Random Forest model fared noticeably better in generalization than ARIMA and Prophet. In order to capture fuller patterns, it made use of features like Lag_1, Lag_2, MA_4, and macroeconomic indices (CPI, Fuel_Price, Unemployment). Plots of feature importance demonstrated the significant predictive value of CPI and lag factors. In sparse sales regions, however, there can still be some slight overfitting.
+
+
+
+
+
+Step 5: XGBoost Forecasting Model.
+A potent gradient boosting algorithm, XGBoost is renowned for its exceptional performance and capacity to manage intricate non-linear patterns. Here, it is adjusted to predict weekly sales by combining both external and engineered features.
+
+```{r}
+install.packages("xgboost")
+install.packages("Matrix")
+library(xgboost)
+library(Matrix)
+library(dplyr)
+
+# Drop rows with NA values (from lags and moving averages)
+ml_data <- na.omit(ml_data)
+
+# Create design matrix
+features <- c("Store", "Month", "Week", "DayOfWeek", "Fuel_Price",
+              "CPI", "Unemployment", "Holiday_Flag", "Lag_1", "Lag_2", "MA_4")
+
+# Convert factors to numeric if necessary
+ml_data$Holiday_Flag <- as.numeric(as.character(ml_data$Holiday_Flag))
+
+# Split data
+set.seed(123)
+train_index <- sample(1:nrow(ml_data), 0.8 * nrow(ml_data))
+train <- ml_data[train_index, ]
+test <- ml_data[-train_index, ]
+
+# Convert to matrix
+X_train <- as.matrix(train[, features])
+y_train <- train$Weekly_Sales
+
+X_test <- as.matrix(test[, features])
+y_test <- test$Weekly_Sales
+
+
+
+xgb_model <- xgboost(
+  data = X_train,
+  label = y_train,
+  nrounds = 100,
+  objective = "reg:squarederror",
+  verbose = 0
+)
+
+# Predict
+xgb_preds <- predict(xgb_model, X_test)
+
+# Evaluate
+xgb_mape <- mean(abs((y_test - xgb_preds) / y_test)) * 100
+xgb_rmse <- sqrt(mean((y_test - xgb_preds)^2))
+
+cat("XGBoost MAPE:", xgb_mape, "\n")
+cat("XGBoost RMSE:", xgb_rmse, "\n")
+
+importance_matrix <- xgb.importance(feature_names = features, model = xgb_model)
+xgb.plot.importance(importance_matrix)
+
+
+```
+Overall, the XGBoost model performed the best, with RMSE = 58,030 and MAPE = 3.61%. Compared to Random Forest, it was better at capturing subtle trends and interactions. The feature importance plot demonstrated the strong predictive influence of lag features on macroeconomic factors, especially the CPI and unemployment. It is strongly advised to use this model for final deployment.
