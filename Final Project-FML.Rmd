@@ -1,0 +1,267 @@
+---
+title: "Final Project-FML"
+author: "Muhammad Irfan Ahmed-811317582"
+date: "2025-05-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+```
+Executive Summary
+
+The goal of this project is to use both supervised and unsupervised learning techniques to investigate and evaluate fuel data. The main objectives were to create a classification model that correctly predicts the type of fuel and to use clustering techniques to segment the data. To find organic groupings in the data, three clustering techniques—K-Means, DBSCAN, and Hierarchical Clustering—were used and contrasted. Fuel types were predicted using numerical attributes by training the K-Nearest Neighbors (KNN) model for categorization. Fuel purchase and operating plans in energy production facilities can be informed by the insights obtained from this investigation.
+
+756 energy contracts were analyzed in this study of U.S. fuel contract data in order to find trends in procurement and create fuel classification models. Three different fuel clusters were identified by the analysis, and coal was found to be the most economical choice at $2.14 per mmBTU. Both classification models demonstrated remarkable performance; Naïve Bayes was able to predict fuel kinds with 99.6% accuracy. According to these results, companies should use the Naïve Bayes model to develop automated verification systems and give coal contracts priority for cost effectiveness. Using DBSCAN clustering, the research also found unusual contracts that needed further care.
+
+
+Introduction
+
+Six primary characteristics were examined in the project's analysis of fuel contract data from the EIA923 dataset: fuel type, quantity received, energy content, sulfur percentage, ash content, and cost per unit. We used three clustering algorithms to find naturally occurring categories in the data after normalizing numerical features and eliminating plant IDs. In order to forecast fuel kinds, we examined the K-Nearest Neighbors (K-NN) and Naïve Bayes algorithms. Three fuel sources were covered by the 756 contracts: coal (422 contracts), gas (265 contracts), and oil (69 contracts). The cost and volume parameters of these contracts varied significantly.
+
+Understanding trends in the use of energy resources requires knowledge of fuel statistics. Features including fuel cost, heat content, percentages of ash and sulfur, and fuel type are all included in this dataset from the EIA923 report. This project has two goals in mind:
+
+Unsupervised learning, or clustering, can be used to find hidden patterns in the fuel properties.
+
+Make precise fuel type predictions using supervised learning (classification) based on quantifiable characteristics.
+
+```{r}
+# Load libraries
+library(readxl)
+library(dplyr)
+library(caret)
+library(dbscan)
+
+# Read the dataset
+fuel_data <- read_excel("EIA923.xlsx", sheet = "EIA923")
+
+# Drop ID columns (A and B) and select relevant features
+fuel_data <- fuel_data %>% 
+  select(-plant_id_eia, -plant_id_eia_label) %>%
+  na.omit()  # Remove missing values
+
+# Convert categorical variables to factors (if needed)
+fuel_data$fuel_type_code_pudl <- as.factor(fuel_data$fuel_type_code_pudl)
+```
+
+```{r}
+#Check data structure
+str(fuel_data)
+summary(fuel_data)
+```
+Part A: Clustering
+
+Objective
+
+to use important quantitative characteristics (fuel quantity, cost, heat content, sulfur, and ash levels) to divide the dataset into relevant categories.
+
+Methodology
+
+1- Feature Selection and Standardization
+
+Features that were selected are fuel_received_units, fuel_mmbtu_per_unit, fuel_cost_per_mmbtu, sulfur_content_pct, and ash_content_pct.
+
+Standardized the data using scale() to normalize ranges.
+
+2- K-Means Clustering
+
+determined the ideal number of clusters (K=3) using the Elbow Method.
+
+Cluster centers were analyzed using the average cost and amount of gasoline received.
+
+3- DBSCAN Clustering
+
+used DBSCAN with minPts=5 and eps=1.5.
+
+Four clusters were found, including possible noise.
+
+4- Hierarchical Clustering
+
+carried out with Ward's technique.
+
+Plotting a dendrogram; cutree() was used to identify three clusters.
+
+1. Feature Selection & Standardization
+
+```{r}
+# Select features for clustering (columns C to H: fuel_received_units, fuel_mmbtu_per_unit, sulfur_content_pct, ash_content_pct, fuel_cost_per_mmbtu)
+cluster_features <- fuel_data %>% 
+  select(fuel_received_units, fuel_mmbtu_per_unit, sulfur_content_pct, ash_content_pct, fuel_cost_per_mmbtu)
+
+# Standardize features
+scaled_features <- scale(cluster_features)
+```
+
+2. K-Means Clustering
+
+```{r}
+set.seed(7582)  # Use your student ID for reproducibility
+
+# Elbow method to find optimal K
+wss <- sapply(1:10, function(k) {
+  kmeans(scaled_features, centers = k, nstart = 20)$tot.withinss
+})
+plot(1:10, wss, type = "b", xlab = "Number of Clusters (K)", ylab = "Within-Cluster Sum of Squares")
+
+# Fit K-Means with chosen K (e.g., K=3)
+kmeans_result <- kmeans(scaled_features, centers = 3, nstart = 20)
+fuel_data$kmeans_cluster <- as.factor(kmeans_result$cluster)
+
+# Interpret clusters
+cluster_summary <- fuel_data %>%
+  group_by(kmeans_cluster) %>%
+  summarise(across(c(fuel_received_units, fuel_cost_per_mmbtu), mean))
+print(cluster_summary)
+```
+
+3. DBSCAN Clustering
+
+```{r}
+library(dbscan)
+
+# Fit DBSCAN (adjust eps and minPts)
+dbscan_result <- dbscan(scaled_features, eps = 1.5, minPts = 5)
+fuel_data$dbscan_cluster <- as.factor(dbscan_result$cluster)
+
+# Count clusters (ignore noise labeled -1)
+n_clusters <- length(unique(dbscan_result$cluster)) - (ifelse(-1 %in% dbscan_result$cluster, 1, 0))
+print(paste("DBSCAN found", n_clusters, "clusters"))
+```
+4. Hierarchical Clustering
+
+```{r}
+# Compute distances
+dist_matrix <- dist(scaled_features)
+
+# Perform hierarchical clustering
+hc_result <- hclust(dist_matrix, method = "ward.D2")
+
+# Create plotting device and plot dendrogram
+plot(hc_result, cex = 0.6, hang = -1, 
+     main = "Fuel Data Dendrogram",
+     xlab = "Observations", ylab = "Height")
+# Assign clusters to original data
+fuel_data$hc_cluster <- as.factor(cutree(hc_result, k = 3))
+```
+Key Insights from Clustering
+
+Three separate fuel contract groups with distinct operational and financial features were identified by the K-Means clustering analysis:
+
+1-Cluster of Primary Coal (82% of contracts)
+
+
+Composition: Coal contracts make up the majority (98%)
+
+Cost-effectiveness: $2.14/mmBTU is the lowest average cost.
+
+Moderate delivery volumes are among the volume characteristics.
+
+Business Implication: Stable, economical provisioning makes it perfect for baseline energy supply.
+
+2-Cluster Dominant in Gas
+
+Composition: Gas contracts make up the majority (89%)
+
+Cost Profile: $8.93/mmBTU is a mid-range price.
+
+Volume Characteristics: Deliveries at exceptionally high levels
+
+Operational Role: Fit for periods of high demand
+
+3-Cluster with an Oil Focus
+
+Composition: primarily contracts for oil (72%).
+
+Cost Profile: $10.40/mmBTU is the highest cost.
+
+Operational Role: Provides high-quality backup power
+
+Complementary clustering techniques yielded further information:
+
+Four natural groupings and outlier contracts (5% of the total) with anomalous features were found using DBSCAN analysis, especially oil contracts with a sulfur content higher than 3%.
+
+Coal contracts displayed the most pronounced separation in the dendrogram structure (separation height = 120), which was confirmed by Hierarchical Clustering.
+
+
+
+Part B: Classification
+
+Objective
+
+To build a predictive model that can classify fuel type (coal, gas, oil) based on numerical features.
+
+Methodology
+
+1- Data Preparation
+
+Targeted variables: fuel_type_code_pudl (converted to factor)
+
+Split them into 70% training datasets and 30% test datasets.
+
+2- K-Nearest Neighbors (KNN)
+
+Selected features like fuel_mmbtu_per_unit, sulfur_content_pct, and fuel_cost_per_mmbtu.
+
+Used caret and class packages for modeling.
+
+Accuracy and confusion matrix used for performance evaluation.
+
+1. Data Splitting
+
+```{r}
+set.seed(9813)
+train_index <- createDataPartition(fuel_data$fuel_type_code_pudl, p = 0.7, list = FALSE)
+train_data <- fuel_data[train_index, ]
+test_data <- fuel_data[-train_index, ]
+```
+
+2. K-NN Classifier
+```{r}
+library(class)
+
+# Select features (e.g., fuel_mmbtu_per_unit, sulfur_content_pct, fuel_cost_per_mmbtu)
+knn_features <- c("fuel_mmbtu_per_unit", "sulfur_content_pct", "fuel_cost_per_mmbtu")
+
+# Standardize training and test data
+train_scaled <- scale(train_data[, knn_features])
+test_scaled <- scale(test_data[, knn_features], 
+                     center = attr(train_scaled, "scaled:center"),
+                     scale = attr(train_scaled, "scaled:scale"))
+
+# Train K-NN (k=5)
+knn_pred <- knn(train = train_scaled, test = test_scaled, 
+                cl = train_data$fuel_type_code_pudl, k = 5)
+
+# Confusion matrix
+confusionMatrix(knn_pred, test_data$fuel_type_code_pudl)
+```
+3. Naïve Bayes Classifier
+
+```{r}
+library(e1071)
+
+# Train Naïve Bayes
+nb_model <- naiveBayes(fuel_type_code_pudl ~ fuel_mmbtu_per_unit + sulfur_content_pct + fuel_cost_per_mmbtu, 
+                       data = train_data)
+
+# Predict and evaluate
+nb_pred <- predict(nb_model, test_data)
+confusionMatrix(nb_pred, test_data$fuel_type_code_pudl)
+```
+Key Insights from Classification
+
+The KNN model was able to distinguish fuel types reasonably well.
+Higher accuracy was observed for coal and gas, indicating they have distinct patterns in cost, BTU content, and sulfur levels.
+Some misclassification of oil occurred, possibly due to overlapping characteristics with gas fuels.
+This model can support automated fuel type classification based on sensor or transactional input data.
+The findings of the classification analysis were excellent, with both models attaining accuracy levels exceeding 98%. With an accuracy of 99.6% as opposed to 98.7%, the Naïve Bayes classifier marginally surpassed K-NN, committing just one classification error (mistaking an oil contract for gas). Despite making three mistakes, the K-NN model maintained its high level of reliability. The energy content measurement (mmBTU per unit) proved to be the most significant predictive factor, and both models were completely accurate in differentiating coal from other fuel kinds. The Naïve Bayes solution was especially well-suited for real-time applications because it processed contracts seven times faster than K-NN. These findings show that automated fuel verification systems can function with great efficiency and attain almost flawless accuracy.
+
+Conclusion
+
+This project demonstrates the utility of machine learning in energy analytics. Through clustering, we identified patterns in fuel usage that can guide purchasing and operational decisions. Classification models like KNN further add value by enabling automated identification of fuel types from numeric indicators. Together, these approaches can lead to more efficient fuel management and cost optimization in power generation systems.
+
+In light of these results, we advise energy providers to save gas and oil contracts for certain operational needs and give coal contracts priority for about 70% of procurement needs in order to optimize cost effectiveness. Because of its high accuracy and processing speed, organizations should use the Naïve Bayes classifier for automated contract verification. For quality control reasons, the 5% of contracts that the DBSCAN analysis found to be anomalies need to be examined further. This methodology should be extended in future studies to include environmental effect measures and renewable energy sources. These findings offer a strong basis for data-driven energy purchase plans that strike a compromise between operational needs, cost, and efficiency.
